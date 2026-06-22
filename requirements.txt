@@ -1,0 +1,11 @@
+# Dependencias para CONSTRUIR el ejecutable (NO se necesitan en el PC destino).
+# El programa en sí solo usa la librería estándar de Python (tkinter, urllib,
+# subprocess, etc.), por eso el .exe queda autocontenido.
+
+pyinstaller>=6.0
+
+# Opcional: medición de upload más precisa. Si está instalado en el PC donde
+# se CONSTRUYE no aporta nada (se invoca como comando externo), pero puedes
+# instalarlo en el PC destino para mejorar la medición. El programa funciona
+# sin él gracias al método de respaldo con Cloudflare.
+# speedtest-cli>=2.1

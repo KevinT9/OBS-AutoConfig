@@ -6,8 +6,12 @@ actual de OBS, indica qué mejorar y aplica la configuración óptima.
 Mejoras clave:
   • Detecta la GPU y recomienda el encoder por HARDWARE (NVENC/AMF/QuickSync)
     cuando está disponible — libera el CPU y da streams más estables que x264.
-  • Detección de hardware vía PowerShell/CIM (wmic está obsoleto en Win11).
+  • Si NO hay gráfica usable, cae automáticamente en x264 por CPU.
+  • Detección de hardware vía PowerShell/CIM (funciona en Windows 10 y 11;
+    wmic queda solo como respaldo porque está obsoleto en Win11 reciente).
   • Lee la configuración actual de OBS y la compara con la recomendada.
+
+Compatibilidad: Windows 10 y 11, con o sin tarjeta gráfica dedicada.
 """
 
 import os
@@ -69,6 +73,18 @@ def _parse_json(text):
         return json.loads(text)
     except Exception:
         return None
+
+
+def get_windows_label():
+    """Devuelve una etiqueta legible del SO (distingue Win10 de Win11 por build)."""
+    if platform.system() != 'Windows':
+        return f"{platform.system()} {platform.release()}"
+    try:
+        build = int(platform.version().split('.')[-1])
+        name = 'Windows 11' if build >= 22000 else 'Windows 10'
+        return f"{name} (build {build})"
+    except Exception:
+        return f"Windows {platform.release()}"
 
 
 # ─────────────────────────────────────────────
@@ -173,12 +189,14 @@ def get_gpu_info():
 
     result['all'] = names[:]
 
-    # Descartar adaptadores virtuales / remotos
-    virtual_kw = ['parsec', 'virtual', 'basic display', 'remote', 'idd', 'meta ', 'oray', 'sunshine']
-    real = [n for n in names if not any(v in n.lower() for v in virtual_kw)]
-    result['names'] = real or names
+    # Descartar adaptadores virtuales o sin driver real (no sirven para codificar).
+    # En una PC sin gráfica suele quedar solo "Microsoft Basic Display Adapter".
+    skip_kw = ['parsec', 'virtual', 'basic display', 'basic render', 'remote',
+               'idd', 'meta ', 'oray', 'sunshine', 'citrix', 'hyper-v', 'displaylink']
+    real = [n for n in names if not any(v in n.lower() for v in skip_kw)]
+    result['names'] = real  # solo GPUs reales/usables (vacío = sin gráfica → x264 CPU)
 
-    joined = ' '.join(result['names']).lower()
+    joined = ' '.join(real).lower()
     if any(k in joined for k in ['nvidia', 'geforce', 'rtx', 'gtx', 'quadro']):
         result['vendor'] = 'nvidia'
         result['has_hw_encoder'] = True
@@ -188,6 +206,7 @@ def get_gpu_info():
     elif 'intel' in joined:
         result['vendor'] = 'intel'
         result['has_hw_encoder'] = True
+    # Sin coincidencias → vendor='none' → se usará x264 por CPU (PC sin gráfica)
 
     return result
 
@@ -597,7 +616,10 @@ def apply_obs_config(settings):
 
 def format_settings_text(settings, cpu_info, current_obs=None, improvements=None):
     enc = settings['encoder']
-    gpu_text = ', '.join(settings['gpu_names']) if settings['gpu_names'] else 'No detectada'
+    if settings['gpu_names']:
+        gpu_text = ', '.join(settings['gpu_names'])
+    else:
+        gpu_text = 'Ninguna usable → codificación por CPU (x264)'
 
     lines = [
         "╔══════════════════════════════════════════════════════╗",
@@ -605,6 +627,7 @@ def format_settings_text(settings, cpu_info, current_obs=None, improvements=None
         "╚══════════════════════════════════════════════════════╝",
         "",
         "── SPECS DETECTADAS ──────────────────────────────────",
+        f"  SO:      {get_windows_label()}",
         f"  CPU:     {cpu_info['name']}",
         f"  Hilos:   {settings['cpu_threads']}",
         f"  RAM:     {settings['ram_gb']} GB",
