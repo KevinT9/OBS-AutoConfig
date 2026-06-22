@@ -16,6 +16,7 @@ from escanear import (
     get_cpu_info, get_ram_gb, get_gpu_info, get_screen_resolution,
     measure_upload_speed, calculate_obs_settings, read_obs_current_config,
     build_improvement_list, format_settings_text, apply_obs_config,
+    read_obs_service, fetch_twitch_ingests, apply_twitch_service,
 )
 
 # Paleta
@@ -25,6 +26,7 @@ ACCENT = '#0f3460'
 ACCENT_HOVER = '#16498c'
 GREEN = '#4ecca3'
 GREEN_HOVER = '#6fe3bd'
+YELLOW = '#ffd166'
 TEXT = '#e0e0e0'
 SUBTEXT = '#a0a0b0'
 
@@ -88,8 +90,16 @@ class OBSConfigurator:
             bg=GREEN, fg='#0a0a1a', relief='flat', borderwidth=0,
             padx=12, pady=6, cursor='hand2', command=self._open_optimizer
         )
-        self.btn_optimize.pack(side='right', padx=16)
+        self.btn_optimize.pack(side='right', padx=(0, 16))
         add_hover(self.btn_optimize, GREEN, GREEN_HOVER)
+
+        self.btn_twitch = tk.Button(
+            header, text="🎮 Twitch", font=('Consolas', 9, 'bold'),
+            bg=ACCENT, fg=TEXT, relief='flat', borderwidth=0,
+            padx=12, pady=6, cursor='hand2', command=self._open_twitch
+        )
+        self.btn_twitch.pack(side='right', padx=(0, 8))
+        add_hover(self.btn_twitch, ACCENT, ACCENT_HOVER)
 
         status_frame = tk.Frame(self.root, bg=CARD, height=36)
         status_frame.pack(fill='x')
@@ -159,6 +169,13 @@ class OBSConfigurator:
             OptimizerWindow(self.root)
         except Exception as e:
             messagebox.showerror("Optimizador", f"No se pudo abrir el optimizador:\n{e}", parent=self.root)
+
+    def _open_twitch(self):
+        """Abre el diálogo para configurar el servicio de Twitch en OBS."""
+        try:
+            TwitchDialog(self.root)
+        except Exception as e:
+            messagebox.showerror("Twitch", f"No se pudo abrir la configuración de Twitch:\n{e}", parent=self.root)
 
     # ── Análisis ──
     def _start_analysis(self):
@@ -278,6 +295,132 @@ class OBSConfigurator:
                 "Usa los valores mostrados en pantalla para configurar OBS manualmente.",
                 parent=self.root
             )
+
+
+class TwitchDialog:
+    """Diálogo para configurar el servicio de Twitch (service.json) en OBS."""
+
+    def __init__(self, parent):
+        self.parent = parent
+        self.win = tk.Toplevel(parent)
+        self.win.title("Configurar Twitch en OBS")
+        self.win.configure(bg=BG)
+        self.win.resizable(False, False)
+
+        self.servers = [('Auto (recomendado)', 'auto')]  # (nombre, url)
+        self.show_key = tk.BooleanVar(value=False)
+
+        self._build_ui()
+
+        self.win.update_idletasks()
+        w, h = 520, 420
+        sw, sh = self.win.winfo_screenwidth(), self.win.winfo_screenheight()
+        self.win.geometry(f"{w}x{h}+{max(0, (sw - w) // 2)}+{max(0, (sh - h) // 3)}")
+        self.win.transient(parent)
+        self.win.lift()
+        self.win.focus_force()
+
+        threading.Thread(target=self._load_state, daemon=True).start()
+
+    def _build_ui(self):
+        header = tk.Frame(self.win, bg=ACCENT, height=56)
+        header.pack(fill='x')
+        header.pack_propagate(False)
+        tk.Label(header, text="🎮 CONFIGURAR TWITCH", font=('Consolas', 13, 'bold'),
+                 bg=ACCENT, fg=GREEN).pack(side='left', padx=16, pady=14)
+
+        body = tk.Frame(self.win, bg=BG, padx=18, pady=14)
+        body.pack(fill='both', expand=True)
+
+        self.current_var = StringVar(value="Leyendo configuración actual…")
+        tk.Label(body, textvariable=self.current_var, font=('Consolas', 8),
+                 bg=BG, fg=SUBTEXT, justify='left', anchor='w', wraplength=480).pack(fill='x', pady=(0, 10))
+
+        tk.Label(body, text="Servidor de ingest:", font=('Consolas', 9, 'bold'),
+                 bg=BG, fg=TEXT, anchor='w').pack(fill='x')
+        self.server_box = ttk.Combobox(body, state='readonly', font=('Consolas', 9),
+                                       values=['Auto (recomendado)'])
+        self.server_box.current(0)
+        self.server_box.pack(fill='x', pady=(2, 12))
+
+        tk.Label(body, text="Stream key (opcional — si la dejas vacía se conserva la actual):",
+                 font=('Consolas', 9, 'bold'), bg=BG, fg=TEXT, anchor='w', wraplength=480,
+                 justify='left').pack(fill='x')
+        self.key_entry = tk.Entry(body, show='*', font=('Consolas', 9), bg=CARD, fg=TEXT,
+                                  insertbackground=GREEN, relief='flat')
+        self.key_entry.pack(fill='x', ipady=4, pady=(2, 2))
+        tk.Checkbutton(body, text="Mostrar clave", variable=self.show_key, command=self._toggle_key,
+                       font=('Consolas', 8), bg=BG, fg=SUBTEXT, selectcolor=ACCENT,
+                       activebackground=BG, activeforeground=GREEN, anchor='w').pack(fill='x')
+
+        tk.Label(body, text="Obtén tu clave en: dashboard.twitch.tv → Ajustes → Transmisión",
+                 font=('Consolas', 8), bg=BG, fg=SUBTEXT, anchor='w',
+                 wraplength=480, justify='left').pack(fill='x', pady=(8, 0))
+        tk.Label(body, text="⚠ Cierra OBS antes de aplicar (si está abierto, sobrescribirá esto al cerrarse).",
+                 font=('Consolas', 8), bg=BG, fg=YELLOW, anchor='w',
+                 wraplength=480, justify='left').pack(fill='x', pady=(2, 0))
+
+        self.status_var = StringVar(value="")
+        tk.Label(self.win, textvariable=self.status_var, font=('Consolas', 8),
+                 bg=CARD, fg=SUBTEXT, anchor='w', padx=16).pack(fill='x')
+
+        btns = tk.Frame(self.win, bg=BG, pady=10)
+        btns.pack(fill='x', padx=16)
+        bstyle = {'font': ('Consolas', 10, 'bold'), 'relief': 'flat', 'borderwidth': 0,
+                  'padx': 16, 'pady': 8, 'cursor': 'hand2'}
+        self.btn_apply = tk.Button(btns, text="✓ APLICAR", bg=GREEN, fg='#0a0a1a',
+                                   command=self._apply, **bstyle)
+        self.btn_apply.pack(side='left', padx=(0, 8))
+        add_hover(self.btn_apply, GREEN, GREEN_HOVER)
+        btn_close = tk.Button(btns, text="Cerrar", bg=ACCENT, fg=TEXT,
+                              command=self.win.destroy, **bstyle)
+        btn_close.pack(side='left')
+        add_hover(btn_close, ACCENT, ACCENT_HOVER)
+
+    def _toggle_key(self):
+        self.key_entry.configure(show='' if self.show_key.get() else '*')
+
+    def _load_state(self):
+        # Config actual
+        current, err = read_obs_service()
+        if err:
+            self.current_var.set(f"⚠ {err}")
+        elif current:
+            if current['exists']:
+                key_txt = "configurada ✓" if current['has_key'] else "no configurada"
+                self.current_var.set(
+                    f"Actual → servicio: {current.get('service') or '—'} | "
+                    f"servidor: {current.get('server') or '—'} | clave: {key_txt}"
+                )
+            else:
+                self.current_var.set("Aún no hay service.json (se creará al aplicar).")
+
+        # Lista de ingests
+        self.status_var.set("Obteniendo servidores de Twitch…")
+        self.servers = fetch_twitch_ingests()
+        names = [n for n, _ in self.servers]
+        self.server_box.configure(values=names)
+        self.server_box.current(0)
+        extra = "" if len(self.servers) > 1 else " (sin conexión: solo Auto)"
+        self.status_var.set(f"{len(self.servers)} servidores disponibles{extra}.")
+
+    def _apply(self):
+        idx = self.server_box.current()
+        idx = idx if idx >= 0 else 0
+        name, server_url = self.servers[idx]
+        key = self.key_entry.get().strip() or None
+
+        self.btn_apply.configure(state='disabled')
+        self.status_var.set("Aplicando…")
+        ok, msg = apply_twitch_service(server=server_url, stream_key=key)
+        self.btn_apply.configure(state='normal')
+
+        if ok:
+            self.status_var.set("✓ Twitch configurado.")
+            messagebox.showinfo("Twitch", msg + f"\n\nServidor: {name}", parent=self.win)
+        else:
+            self.status_var.set("No se pudo aplicar.")
+            messagebox.showerror("Twitch", msg, parent=self.win)
 
 
 def main():

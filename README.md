@@ -18,6 +18,7 @@ Un único `.exe` autocontenido. Compatible con **Windows 10 y 11 (64 bits)**. No
 - 📶 **Mide tu velocidad de subida** real y ajusta el bitrate sin pasarte del límite de Twitch.
 - 📋 **Lee tu configuración actual de OBS** y te dice exactamente **qué deberías mejorar**.
 - ⚙️ **Aplica la configuración por ti** (con backup automático de `basic.ini`), o te da los valores para ponerlos a mano.
+- 🎮 **Configura Twitch en OBS**: deja el servicio listo (servidor de ingest + stream key opcional) escribiendo `service.json`, con backup.
 - 🚀 **Optimiza la PC para streaming** (módulo aparte): cierra apps pesadas, plan de energía Alto rendimiento, Modo Juego, HAGS, silenciar notificaciones y prioridad de OBS — todo **reversible** con un botón.
 - 🖥️ Interfaz simple: un botón para analizar, copiar o aplicar.
 
@@ -29,6 +30,15 @@ Un único `.exe` autocontenido. Compatible con **Windows 10 y 11 (64 bits)**. No
    - También puedes pulsar **⎘ COPIAR** y ajustar los valores manualmente en OBS.
 
 > Al aplicar, se crea un respaldo `basic.ini.bak` en tu perfil de OBS por si quieres revertir.
+
+## 🎮 Configurar Twitch en OBS
+
+Pulsa **🎮 Twitch** (arriba a la derecha) para dejar OBS listo para transmitir:
+
+- **Servidor de ingest**: elige *Auto* (recomendado) o un servidor concreto de la lista oficial de Twitch.
+- **Stream key** (opcional): pégala para configurarla de una vez; si la dejas vacía, se conserva la que ya tuvieras.
+
+Se escribe en el `service.json` del perfil de OBS (con backup `.json.bak`). **Cierra OBS antes de aplicar.** Tu clave la obtienes en `dashboard.twitch.tv → Ajustes → Transmisión`.
 
 ## 🚀 Optimizar la PC para streaming
 

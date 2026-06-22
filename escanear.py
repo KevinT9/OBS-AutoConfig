@@ -740,6 +740,106 @@ def apply_obs_config(settings):
 
 
 # ─────────────────────────────────────────────
+# SERVICIO TWITCH (service.json)
+# ─────────────────────────────────────────────
+
+def get_obs_service_path():
+    """Ruta al service.json del perfil de OBS (junto a basic.ini)."""
+    basic_ini, error = get_obs_basic_ini_path()
+    if error:
+        return None, error
+    return basic_ini.parent / 'service.json', None
+
+
+def read_obs_service():
+    """Lee la configuración de servicio (Twitch) actual de OBS."""
+    service_path, error = get_obs_service_path()
+    if error:
+        return None, error
+
+    if not service_path.exists():
+        return {'exists': False, 'service': None, 'server': None,
+                'has_key': False, 'path': str(service_path)}, None
+
+    try:
+        data = json.loads(service_path.read_text(encoding='utf-8'))
+    except Exception as e:
+        return None, f"No se pudo leer service.json: {e}"
+
+    settings = data.get('settings', {}) or {}
+    return {
+        'exists': True,
+        'service': settings.get('service'),
+        'server': settings.get('server'),
+        'has_key': bool(settings.get('key')),
+        'path': str(service_path),
+    }, None
+
+
+def fetch_twitch_ingests(timeout=8):
+    """
+    Lista de servidores de ingest de Twitch como [(nombre, server_url)].
+    Siempre incluye 'Auto' primero. Si falla la red, solo devuelve Auto.
+    """
+    servers = [('Auto (recomendado)', 'auto')]
+    try:
+        with urllib.request.urlopen('https://ingest.twitch.tv/ingests', timeout=timeout) as r:
+            data = json.loads(r.read().decode('utf-8'))
+        for ing in data.get('ingests', []):
+            name = ing.get('name')
+            tmpl = ing.get('url_template') or ''
+            url = tmpl.split('/{stream_key}')[0] if tmpl else None
+            if name and url:
+                servers.append((name, url))
+    except Exception:
+        pass
+    return servers
+
+
+def apply_twitch_service(server='auto', stream_key=None):
+    """
+    Configura OBS para transmitir a Twitch (service.json), con backup.
+    Si stream_key es None/vacío, conserva la clave existente.
+    """
+    service_path, error = get_obs_service_path()
+    if error:
+        return False, error
+
+    data = {}
+    if service_path.exists():
+        try:
+            data = json.loads(service_path.read_text(encoding='utf-8'))
+        except Exception:
+            data = {}
+        try:
+            shutil.copy2(service_path, service_path.with_suffix('.json.bak'))
+        except Exception:
+            pass
+
+    data['type'] = 'rtmp_common'
+    settings = data.get('settings', {}) or {}
+    settings['service'] = 'Twitch'
+    settings['server'] = server or 'auto'
+    settings.setdefault('bwtest', False)
+    if stream_key:
+        settings['key'] = stream_key
+    data['settings'] = settings
+
+    try:
+        service_path.write_text(json.dumps(data, indent=4), encoding='utf-8')
+    except Exception as e:
+        return False, f"No se pudo escribir service.json: {e}"
+
+    if stream_key:
+        key_msg = "clave actualizada"
+    elif settings.get('key'):
+        key_msg = "clave existente conservada"
+    else:
+        key_msg = "sin clave (pégala en OBS → Ajustes → Emisión)"
+    return True, f"Twitch configurado (servidor: {server}, {key_msg})."
+
+
+# ─────────────────────────────────────────────
 # FORMATEAR CONFIGURACIÓN PARA MOSTRAR
 # ─────────────────────────────────────────────
 
