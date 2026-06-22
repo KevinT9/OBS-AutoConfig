@@ -24,7 +24,7 @@ python -m pip install -r requirements.txt
 
 # 3) Construir
 Write-Host "`nGenerando el ejecutable (puede tardar 1-2 minutos)..." -ForegroundColor Cyan
-python -m PyInstaller --onefile --windowed --name OBS-AutoConfig --clean --noconfirm escanear.py
+python -m PyInstaller --onefile --windowed --name OBS-AutoConfig --clean --noconfirm --hidden-import optimizar escanear.py
 
 Write-Host "`n============================================================" -ForegroundColor Green
 Write-Host "  LISTO!  El ejecutable esta en: dist\OBS-AutoConfig.exe" -ForegroundColor Green

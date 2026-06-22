@@ -18,6 +18,7 @@ Un único `.exe` autocontenido. Compatible con **Windows 10 y 11 (64 bits)**. No
 - 📶 **Mide tu velocidad de subida** real y ajusta el bitrate sin pasarte del límite de Twitch.
 - 📋 **Lee tu configuración actual de OBS** y te dice exactamente **qué deberías mejorar**.
 - ⚙️ **Aplica la configuración por ti** (con backup automático de `basic.ini`), o te da los valores para ponerlos a mano.
+- 🚀 **Optimiza la PC para streaming** (módulo aparte): cierra apps pesadas, plan de energía Alto rendimiento, Modo Juego, HAGS, silenciar notificaciones y prioridad de OBS — todo **reversible** con un botón.
 - 🖥️ Interfaz simple: un botón para analizar, copiar o aplicar.
 
 ## 🚀 Uso
@@ -28,6 +29,21 @@ Un único `.exe` autocontenido. Compatible con **Windows 10 y 11 (64 bits)**. No
    - También puedes pulsar **⎘ COPIAR** y ajustar los valores manualmente en OBS.
 
 > Al aplicar, se crea un respaldo `basic.ini.bak` en tu perfil de OBS por si quieres revertir.
+
+## 🚀 Optimizar la PC para streaming
+
+Pulsa **🚀 Optimizar PC** (arriba a la derecha) para abrir el optimizador. Pulsa **Analizar estado** para ver un diagnóstico y marca lo que quieras aplicar:
+
+| Optimización | Qué hace |
+|---|---|
+| **Cerrar apps pesadas** | Detecta navegador, Discord, launchers… y los cierra para liberar RAM/CPU |
+| **Prioridad de OBS** | Sube la prioridad del proceso de OBS si está abierto |
+| **Plan de energía** | Activa *Alto rendimiento* para que la CPU no haga *throttling* |
+| **Modo Juego** | Activa el Modo Juego de Windows |
+| **HAGS** | Programación de GPU acelerada por hardware (requiere admin + reinicio) |
+| **Silenciar notificaciones** | Evita popups durante el directo |
+
+Todos los cambios se guardan y puedes deshacerlos con **↩ Restaurar** al terminar el stream. No borra archivos ni desactiva servicios. También puedes ejecutar el optimizador por separado con `python optimizar.py`.
 
 ## 🧠 Cómo decide el encoder
 
@@ -72,6 +88,7 @@ python escanear.py
 | Archivo | Descripción |
 |---|---|
 | `escanear.py` | Programa principal (detección, lógica y GUI) |
+| `optimizar.py` | Módulo de optimización de PC para streaming |
 | `requirements.txt` | Dependencias para **construir** el `.exe` (PyInstaller) |
 | `build.bat` / `build.ps1` | Scripts para generar el ejecutable |
 | `README_BUILD.md` | Guía detallada de compilación y distribución |

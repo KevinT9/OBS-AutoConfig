@@ -831,6 +831,13 @@ class OBSConfigurator:
         tk.Label(header, text="para Twitch",
                  font=('Consolas', 10), bg=ACCENT, fg=SUBTEXT).pack(side='left', pady=22)
 
+        self.btn_optimize = tk.Button(
+            header, text="🚀 Optimizar PC", font=('Consolas', 9, 'bold'),
+            bg=GREEN, fg='#0a0a1a', relief='flat', borderwidth=0,
+            padx=12, pady=6, cursor='hand2', command=self._open_optimizer
+        )
+        self.btn_optimize.pack(side='right', padx=16)
+
         status_frame = tk.Frame(self.root, bg=CARD, height=36)
         status_frame.pack(fill='x')
         status_frame.pack_propagate(False)
@@ -887,6 +894,14 @@ class OBSConfigurator:
     def _set_status(self, text):
         self.status_var.set(text)
         self.root.update_idletasks()
+
+    def _open_optimizer(self):
+        """Abre el módulo de optimización de PC en una ventana aparte."""
+        try:
+            from optimizar import OptimizerWindow
+            OptimizerWindow(self.root)
+        except Exception as e:
+            messagebox.showerror("Optimizador", f"No se pudo abrir el optimizador:\n{e}")
 
     def _start_analysis(self):
         self.btn_analyze.configure(state='disabled')
