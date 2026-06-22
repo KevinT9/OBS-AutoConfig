@@ -73,21 +73,22 @@ Si prefieres generar el `.exe` tú mismo (o modificar el programa), consulta **[
 
 ```powershell
 python -m pip install -r requirements.txt
-python -m PyInstaller --onefile --windowed --name OBS-AutoConfig --clean --noconfirm escanear.py
+python -m PyInstaller --onefile --windowed --name OBS-AutoConfig --clean --noconfirm --hidden-import interfaz --hidden-import optimizar escanear.py
 # Resultado: dist\OBS-AutoConfig.exe
 ```
 
 También puedes ejecutarlo directamente con Python sin compilar:
 
 ```powershell
-python escanear.py
+python interfaz.py   # (equivalente: python escanear.py)
 ```
 
 ## 📁 Estructura del proyecto
 
 | Archivo | Descripción |
 |---|---|
-| `escanear.py` | Programa principal (detección, lógica y GUI) |
+| `escanear.py` | Lógica: detección de hardware, cálculo y lectura/escritura de OBS |
+| `interfaz.py` | Interfaz gráfica (GUI) principal |
 | `optimizar.py` | Módulo de optimización de PC para streaming |
 | `requirements.txt` | Dependencias para **construir** el `.exe` (PyInstaller) |
 | `build.bat` / `build.ps1` | Scripts para generar el ejecutable |

@@ -415,13 +415,22 @@ class OptimizerWindow:
         self.parent = parent
         self.win = Toplevel(parent) if parent else Tk()
         self.win.title("Optimizar PC para streaming")
-        self.win.geometry("640x640")
-        self.win.resizable(False, False)
+        self.win.minsize(560, 560)
         self.win.configure(bg=BG)
 
         self.status_var = StringVar(value="Pulsa 'Analizar estado' para revisar tu PC")
         self.heavy = []   # procesos pesados detectados
         self._build_ui()
+
+        # Centrar y traer al frente (encima de la app principal si la hay)
+        self.win.update_idletasks()
+        w, h = 640, 640
+        sw, sh = self.win.winfo_screenwidth(), self.win.winfo_screenheight()
+        self.win.geometry(f"{w}x{h}+{max(0, (sw - w) // 2)}+{max(0, (sh - h) // 3)}")
+        if parent:
+            self.win.transient(parent)
+        self.win.lift()
+        self.win.focus_force()
 
         if not parent:
             self.win.mainloop()

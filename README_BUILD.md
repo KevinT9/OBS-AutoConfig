@@ -18,7 +18,7 @@ Elige una opción:
 - Manualmente:
   ```powershell
   python -m pip install -r requirements.txt
-  python -m PyInstaller --onefile --windowed --name OBS-AutoConfig --clean --noconfirm --hidden-import optimizar escanear.py
+  python -m PyInstaller --onefile --windowed --name OBS-AutoConfig --clean --noconfirm --hidden-import interfaz --hidden-import optimizar escanear.py
   ```
 
 Al terminar tendrás:

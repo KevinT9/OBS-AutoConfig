@@ -35,7 +35,7 @@ if errorlevel 1 (
 REM 3) Construir el ejecutable
 echo.
 echo Generando el ejecutable (esto puede tardar 1-2 minutos)...
-python -m PyInstaller --onefile --windowed --name OBS-AutoConfig --clean --noconfirm --hidden-import optimizar escanear.py
+python -m PyInstaller --onefile --windowed --name OBS-AutoConfig --clean --noconfirm --hidden-import interfaz --hidden-import optimizar escanear.py
 if errorlevel 1 (
     echo.
     echo ERROR durante la construccion.
