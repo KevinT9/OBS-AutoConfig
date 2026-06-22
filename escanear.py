@@ -394,7 +394,18 @@ def calculate_obs_settings(cpu_info, ram_gb, upload_mbps, gpu_info=None,
 
     out_width, out_height = scaled_output(base_width, base_height, desired_h)
 
-    # ── Bitrate de video según la resolución de salida ──
+    # ── FPS adaptativo (30/60) ──
+    # 60 fps necesita más cómputo y ~30% más de bitrate. Solo se recomienda con
+    # margen de subida, y con x264 (CPU) además con un procesador potente.
+    can_60 = upload_mbps >= 4.5
+    if is_hw:
+        fps = 60 if can_60 else 30
+    else:
+        fps = 60 if (can_60 and threads >= 12) else 30
+    if out_height >= 1080 and upload_mbps < 6:
+        fps = 30  # 1080p60 exige bastante upload
+
+    # ── Bitrate de video según resolución y FPS ──
     # (Twitch recomienda máx 6000; usamos ~80% del upload como techo)
     max_bitrate = min(int(upload_mbps * 1000 * 0.80), 6000)
     if out_height >= 1080:
@@ -405,14 +416,18 @@ def calculate_obs_settings(cpu_info, ram_gb, upload_mbps, gpu_info=None,
         low, high = 2000, 3500
     else:
         low, high = 800, 2000
+    if fps == 60:  # 60 fps pide más bitrate para la misma calidad
+        low = int(low * 1.2)
+        high = min(int(high * 1.3), 6000)
     recommended_bitrate = max(low, min(max_bitrate, high))
 
-    fps = 30                 # 30 FPS es estable y Twitch lo acepta perfectamente
-    audio_bitrate = 160      # buena calidad, bajo consumo
-    profile = 'main'         # compatible con todos los dispositivos
+    audio_bitrate = 160          # buena calidad, bajo consumo
+    audio_sample_rate = 48000    # Twitch usa 48 kHz
+    profile = 'main'             # compatible con todos los dispositivos
+    scale_type = 'lanczos'       # mejor nitidez al reescalar el lienzo a la salida
 
     res_reason = (
-        f"Monitor {base_width}x{base_height} → salida {out_width}x{out_height} "
+        f"Monitor {base_width}x{base_height} → salida {out_width}x{out_height} @ {fps} FPS "
         f"(según upload {upload_mbps} Mbps y encoder {'hardware' if is_hw else 'CPU'})."
     )
 
@@ -431,6 +446,10 @@ def calculate_obs_settings(cpu_info, ram_gb, upload_mbps, gpu_info=None,
             f"ℹ Tu monitor es {base_width}x{base_height}; se transmitirá escalado a "
             f"{out_width}x{out_height} para ahorrar ancho de banda y CPU/GPU."
         )
+    if fps == 60:
+        warnings.append("ℹ 60 FPS recomendado: tienes margen de upload (y CPU/GPU) suficiente.")
+    elif not is_hw and threads < 12:
+        warnings.append("ℹ 30 FPS por estabilidad: a 60 FPS x264 saturaría tu CPU.")
 
     return {
         'base_width': base_width,
@@ -440,8 +459,10 @@ def calculate_obs_settings(cpu_info, ram_gb, upload_mbps, gpu_info=None,
         'fps': fps,
         'video_bitrate': recommended_bitrate,
         'audio_bitrate': audio_bitrate,
+        'audio_sample_rate': audio_sample_rate,
         'encoder': encoder,
         'profile': profile,
+        'scale_type': scale_type,
         'rate_control': 'CBR',          # requerido por Twitch
         'keyframe_interval': 2,         # requerido por Twitch
         'resolution_reason': res_reason,
@@ -536,6 +557,7 @@ def read_obs_current_config():
     sections = parse_ini_to_sections(content)
     output = sections.get('Output', {})
     video = sections.get('Video', {})
+    audio = sections.get('Audio', {})
     simple = sections.get('SimpleOutput', {})
     advout = sections.get('AdvOut', {})
 
@@ -575,6 +597,8 @@ def read_obs_current_config():
         'encoder_id': encoder_id,
         'encoder_label': ENCODER_LABELS.get((encoder_id or '').strip(), encoder_id),
         'preset': preset,
+        'audio_sample_rate': to_int(audio.get('SampleRate')),
+        'scale_type': (video.get('ScaleType') or '').strip().lower() or None,
     }
     return current, None
 
@@ -629,6 +653,18 @@ def build_improvement_list(current_obs, recommended):
     cur_ab = current_obs.get('audio_bitrate')
     if cur_ab is not None and cur_ab != recommended['audio_bitrate']:
         improvements.append(f"Bitrate de audio: {cur_ab} → {recommended['audio_bitrate']} kb/s.")
+
+    cur_sr = current_obs.get('audio_sample_rate')
+    if cur_sr is not None and cur_sr != recommended['audio_sample_rate']:
+        improvements.append(
+            f"Frecuencia de audio: {cur_sr} Hz → {recommended['audio_sample_rate']} Hz (Twitch usa 48 kHz)."
+        )
+
+    cur_scale = current_obs.get('scale_type')
+    if cur_scale is not None and cur_scale != recommended['scale_type']:
+        improvements.append(
+            f"Filtro de reescalado: {cur_scale} → {recommended['scale_type']} (más nitidez)."
+        )
 
     cur_fam = _encoder_family(current_obs.get('encoder_id'))
     rec_fam = _encoder_family(enc['simple_value'])
@@ -686,6 +722,8 @@ def apply_obs_config(settings):
         ('Video', 'OutputCY'): str(settings['output_height']),
         ('Video', 'FPSType'): '0',
         ('Video', 'FPSCommon'): str(settings['fps']),
+        ('Video', 'ScaleType'): settings['scale_type'],
+        ('Audio', 'SampleRate'): str(settings['audio_sample_rate']),
         ('SimpleOutput', 'VBitrate'): str(settings['video_bitrate']),
         ('SimpleOutput', 'ABitrate'): str(settings['audio_bitrate']),
         ('SimpleOutput', 'StreamEncoder'): enc['simple_value'],
@@ -733,6 +771,7 @@ def format_settings_text(settings, cpu_info, current_obs=None, improvements=None
         f"  FPS:                {settings['fps']}",
         f"  Bitrate video:      {settings['video_bitrate']} kb/s",
         f"  Control de tasa:    {settings['rate_control']} (requerido Twitch)",
+        f"  Filtro reescalado:  {settings['scale_type'].capitalize()} (mejor nitidez)",
         "",
         "── ENCODING ──────────────────────────────────────────",
         f"  Encoder:            {enc['label']}",
@@ -743,6 +782,7 @@ def format_settings_text(settings, cpu_info, current_obs=None, improvements=None
         "",
         "── AUDIO ─────────────────────────────────────────────",
         f"  Bitrate audio:      {settings['audio_bitrate']} kb/s",
+        f"  Frecuencia:         {settings['audio_sample_rate']} Hz (Twitch usa 48 kHz)",
         f"  Codec:              AAC",
         "",
         "── CÓMO APLICAR EN OBS (si no se aplicó automático) ──",
@@ -755,7 +795,8 @@ def format_settings_text(settings, cpu_info, current_obs=None, improvements=None
         f"    • Resolución de salida: {settings['output_width']}x{settings['output_height']}",
         f"    • FPS: {settings['fps']}",
         "  Configuración → Audio:",
-        f"    • Bitrate: {settings['audio_bitrate']}",
+        f"    • Frecuencia de muestreo: {settings['audio_sample_rate']} Hz",
+        f"    • Bitrate (pista 1): {settings['audio_bitrate']}",
     ]
 
     if current_obs:
@@ -771,6 +812,8 @@ def format_settings_text(settings, cpu_info, current_obs=None, improvements=None
             f"  FPS:                {current_obs.get('fps')}",
             f"  Bitrate video:      {br_text}",
             f"  Bitrate audio:      {current_obs.get('audio_bitrate')} kb/s",
+            f"  Frecuencia audio:   {current_obs.get('audio_sample_rate')} Hz",
+            f"  Filtro reescalado:  {current_obs.get('scale_type')}",
             f"  Encoder:            {current_obs.get('encoder_label')}",
             f"  Preset:             {current_obs.get('preset')}",
         ]
