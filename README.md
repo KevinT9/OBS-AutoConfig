@@ -13,6 +13,7 @@ Un único `.exe` autocontenido. Compatible con **Windows 10 y 11 (64 bits)**. No
 ## ✨ Características
 
 - 🔎 **Detecta tu hardware** (CPU, RAM y GPU) vía PowerShell/CIM — funciona en Windows 10 y 11.
+- 🖼️ **Detecta la resolución de tu monitor** y adapta la salida automáticamente (sin upscaling y respetando el aspecto).
 - 🎮 **Elige el mejor encoder automáticamente**: usa el **encoder por hardware** de tu GPU (NVENC/AMF/QuickSync) cuando está disponible, o **x264 por CPU** si no hay gráfica.
 - 📶 **Mide tu velocidad de subida** real y ajusta el bitrate sin pasarte del límite de Twitch.
 - 📋 **Lee tu configuración actual de OBS** y te dice exactamente **qué deberías mejorar**.
@@ -37,7 +38,18 @@ Un único `.exe` autocontenido. Compatible con **Windows 10 y 11 (64 bits)**. No
 | Intel (iGPU) | **QuickSync** (hardware) | Codifica en la iGPU, libera el CPU |
 | Sin gráfica usable | **x264** (CPU) | Preset según los hilos del procesador |
 
-El bitrate de video se calcula a partir de tu subida medida (≈80% del upload, con tope de 6000 kb/s como recomienda Twitch) y se prioriza la **estabilidad** sobre la calidad máxima (720p30 por defecto).
+## 🖼️ Cómo decide la resolución
+
+El **lienzo base** de OBS se ajusta a la resolución nativa de tu monitor, y la **resolución de salida** se escala según tu monitor, tu velocidad de subida y el encoder — siempre conservando la relación de aspecto y **sin nunca hacer upscaling**:
+
+| Velocidad de subida | Salida (auto) | Notas |
+|---|---|---|
+| ≥ 6 Mbps + encoder por hardware | **1080p** | Con x264 (CPU) se limita a 900p para no saturar |
+| ≥ 4.5 Mbps | **900p** | |
+| ≥ 3 Mbps | **720p** | |
+| < 3 Mbps | **480p** | Prioriza estabilidad |
+
+La salida nunca supera la resolución de tu monitor (p. ej. un portátil 1366×768 transmite a 720p, no se fuerza a más). El **bitrate** se calcula a partir de la subida medida (≈80% del upload, tope de 6000 kb/s como recomienda Twitch) y se adapta al nivel de resolución elegido. Se prioriza la **estabilidad** sobre la calidad máxima, con **30 FPS** por defecto.
 
 ## 🛠️ Compilar desde el código
 
