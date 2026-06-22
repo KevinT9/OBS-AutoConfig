@@ -211,6 +211,52 @@ def get_gpu_info():
     return result
 
 
+def get_screen_resolution():
+    """
+    Resolución nativa del monitor principal (ancho, alto). Usa la resolución
+    real en píxeles (no la escalada por DPI). Fallback: 1920x1080.
+    """
+    if platform.system() == 'Windows':
+        data = _parse_json(_run_powershell(
+            "Get-CimInstance Win32_VideoController | "
+            "Where-Object { $_.CurrentHorizontalResolution -and $_.CurrentVerticalResolution } | "
+            "Select-Object CurrentHorizontalResolution,CurrentVerticalResolution | ConvertTo-Json -Compress"
+        ))
+        if isinstance(data, dict):
+            data = [data]
+        best = None
+        if isinstance(data, list):
+            for d in data:
+                try:
+                    w = int(d.get('CurrentHorizontalResolution'))
+                    h = int(d.get('CurrentVerticalResolution'))
+                except (TypeError, ValueError):
+                    continue
+                # El monitor principal suele ser el de mayor área
+                if w > 0 and h > 0 and (best is None or w * h > best[0] * best[1]):
+                    best = (w, h)
+        if best:
+            return best
+    return (1920, 1080)
+
+
+def _even(n):
+    """Redondea a entero par (los encoders de video requieren dimensiones pares)."""
+    n = int(round(n))
+    return n - (n % 2)
+
+
+def scaled_output(native_w, native_h, desired_h):
+    """
+    Escala la salida a una altura estándar (≤ nativa, sin upscaling),
+    conservando la relación de aspecto del monitor.
+    """
+    aspect = native_w / native_h if native_h else (16 / 9)
+    cap = min(desired_h, native_h)
+    out_h = next((s for s in (1080, 900, 720, 480, 360) if s <= cap), cap)
+    return _even(out_h * aspect), _even(out_h)
+
+
 def measure_upload_speed(status_callback=None):
     """
     Mide la velocidad de subida. Intenta speedtest-cli; si no está, sube
@@ -315,44 +361,81 @@ def select_encoder(gpu_info, threads):
     }
 
 
-def calculate_obs_settings(cpu_info, ram_gb, upload_mbps, gpu_info=None, target_res='720p'):
-    """Calcula la configuración óptima de OBS. Prioriza estabilidad."""
+def calculate_obs_settings(cpu_info, ram_gb, upload_mbps, gpu_info=None,
+                           screen_res=None, target_res='auto'):
+    """
+    Calcula la configuración óptima de OBS. Prioriza estabilidad.
+
+    El lienzo base se ajusta a la resolución nativa del monitor y la salida
+    se escala según el monitor, el upload y el encoder:
+      target_res='auto'  → elige la mejor salida sostenible (por defecto)
+      target_res='1080p' / '720p' → fuerza esa altura (igual limitada a lo nativo)
+    """
     threads = cpu_info['threads']
     encoder = select_encoder(gpu_info, threads)
+    is_hw = encoder['type'] == 'hardware'
 
-    # ── Resolución de salida ──
+    # ── Lienzo base = resolución nativa del monitor ──
+    base_width, base_height = screen_res or (1920, 1080)
+
+    # ── Altura de salida deseada ──
     if target_res == '1080p':
-        out_width, out_height = 1920, 1080
-    else:
-        out_width, out_height = 1280, 720
+        desired_h = 1080
+    elif target_res == '720p':
+        desired_h = 720
+    else:  # auto: según upload (y encoder por hardware para 1080p)
+        if upload_mbps >= 6 and is_hw:
+            desired_h = 1080
+        elif upload_mbps >= 4.5:
+            desired_h = 900
+        elif upload_mbps >= 3:
+            desired_h = 720
+        else:
+            desired_h = 480
 
-    # ── Bitrate de video ── (Twitch recomienda máx 6000; usamos 80% del upload)
-    upload_kbps = upload_mbps * 1000
-    max_bitrate = min(int(upload_kbps * 0.80), 6000)
-    if out_height == 720:
-        max_bitrate = min(max_bitrate, 4500)
-        recommended_bitrate = max(1500, min(max_bitrate, 3500))
+    out_width, out_height = scaled_output(base_width, base_height, desired_h)
+
+    # ── Bitrate de video según la resolución de salida ──
+    # (Twitch recomienda máx 6000; usamos ~80% del upload como techo)
+    max_bitrate = min(int(upload_mbps * 1000 * 0.80), 6000)
+    if out_height >= 1080:
+        low, high = 3500, 6000
+    elif out_height >= 900:
+        low, high = 3000, 5000
+    elif out_height >= 720:
+        low, high = 2000, 3500
     else:
-        recommended_bitrate = max(2000, min(max_bitrate, 6000))
+        low, high = 800, 2000
+    recommended_bitrate = max(low, min(max_bitrate, high))
 
     fps = 30                 # 30 FPS es estable y Twitch lo acepta perfectamente
     audio_bitrate = 160      # buena calidad, bajo consumo
     profile = 'main'         # compatible con todos los dispositivos
 
+    res_reason = (
+        f"Monitor {base_width}x{base_height} → salida {out_width}x{out_height} "
+        f"(según upload {upload_mbps} Mbps y encoder {'hardware' if is_hw else 'CPU'})."
+    )
+
     # ── Advertencias / sugerencias ──
     warnings = []
     if upload_mbps < 3:
-        warnings.append("⚠ Upload bajo (<3 Mbps): posible pixelado. Mantén 720p con bitrate ≤2000 kb/s.")
+        warnings.append("⚠ Upload bajo (<3 Mbps): posible pixelado. Se recomienda resolución reducida.")
     if encoder['type'] == 'software' and threads < 4:
         warnings.append("⚠ CPU con pocos hilos y sin GPU para codificar: usa ultrafast y cierra todo antes de streamear.")
     if ram_gb < 6:
         warnings.append("⚠ Poca RAM (<6 GB): cierra el navegador y otras apps durante el stream.")
     if recommended_bitrate < 2000:
         warnings.append("⚠ Bitrate muy bajo: la calidad será limitada pero estable.")
-    if encoder['type'] == 'hardware' and out_height == 720 and upload_mbps >= 6:
-        warnings.append("ℹ Con tu encoder por hardware y este upload podrías subir a 1080p30 (cambia target_res a '1080p').")
+    if out_height < base_height:
+        warnings.append(
+            f"ℹ Tu monitor es {base_width}x{base_height}; se transmitirá escalado a "
+            f"{out_width}x{out_height} para ahorrar ancho de banda y CPU/GPU."
+        )
 
     return {
+        'base_width': base_width,
+        'base_height': base_height,
         'output_width': out_width,
         'output_height': out_height,
         'fps': fps,
@@ -362,6 +445,7 @@ def calculate_obs_settings(cpu_info, ram_gb, upload_mbps, gpu_info=None, target_
         'profile': profile,
         'rate_control': 'CBR',          # requerido por Twitch
         'keyframe_interval': 2,         # requerido por Twitch
+        'resolution_reason': res_reason,
         'warnings': warnings,
         'upload_mbps': upload_mbps,
         'cpu_threads': threads,
@@ -518,6 +602,14 @@ def build_improvement_list(current_obs, recommended):
     improvements = []
     enc = recommended['encoder']
 
+    cur_base = (current_obs.get('base_width'), current_obs.get('base_height'))
+    rec_base = (recommended['base_width'], recommended['base_height'])
+    if None not in cur_base and cur_base != rec_base:
+        improvements.append(
+            f"Lienzo base: {cur_base[0]}x{cur_base[1]} → {rec_base[0]}x{rec_base[1]} "
+            f"(igualar a la resolución de tu monitor)."
+        )
+
     cur_out = (current_obs.get('output_width'), current_obs.get('output_height'))
     rec_out = (recommended['output_width'], recommended['output_height'])
     if None not in cur_out and cur_out != rec_out:
@@ -589,8 +681,8 @@ def apply_obs_config(settings):
     enc = settings['encoder']
     changes = {
         ('Output', 'Mode'): 'Simple',
-        ('Video', 'BaseCX'): '1920',
-        ('Video', 'BaseCY'): '1080',
+        ('Video', 'BaseCX'): str(settings['base_width']),
+        ('Video', 'BaseCY'): str(settings['base_height']),
         ('Video', 'OutputCX'): str(settings['output_width']),
         ('Video', 'OutputCY'): str(settings['output_height']),
         ('Video', 'FPSType'): '0',
@@ -632,11 +724,13 @@ def format_settings_text(settings, cpu_info, current_obs=None, improvements=None
         f"  Hilos:   {settings['cpu_threads']}",
         f"  RAM:     {settings['ram_gb']} GB",
         f"  GPU:     {gpu_text}",
+        f"  Monitor: {settings['base_width']}x{settings['base_height']}",
         f"  Upload:  {settings['upload_mbps']} Mbps",
         "",
         "── CONFIGURACIÓN DE VIDEO ────────────────────────────",
-        f"  Resolución base:    1920x1080",
+        f"  Resolución base:    {settings['base_width']}x{settings['base_height']} (lienzo = monitor)",
         f"  Resolución salida:  {settings['output_width']}x{settings['output_height']}",
+        f"  Motivo resolución:  {settings['resolution_reason']}",
         f"  FPS:                {settings['fps']}",
         f"  Bitrate video:      {settings['video_bitrate']} kb/s",
         f"  Control de tasa:    {settings['rate_control']} (requerido Twitch)",
@@ -658,6 +752,7 @@ def format_settings_text(settings, cpu_info, current_obs=None, improvements=None
         f"    • Encoder: {enc['label']}",
         f"    • Preset/Calidad: {enc['preset_human']}",
         "  Configuración → Video:",
+        f"    • Resolución base (lienzo): {settings['base_width']}x{settings['base_height']}",
         f"    • Resolución de salida: {settings['output_width']}x{settings['output_height']}",
         f"    • FPS: {settings['fps']}",
         "  Configuración → Audio:",
@@ -826,6 +921,11 @@ class OBSConfigurator:
             else:
                 self._write("  • No se detectó GPU dedicada (se usará x264 por CPU)")
 
+            self._set_status("Detectando resolución del monitor...")
+            self._write("Detectando resolución del monitor...")
+            screen_res = get_screen_resolution()
+            self._write(f"  ✓ {screen_res[0]}x{screen_res[1]}")
+
             self._set_status("Midiendo velocidad de upload (puede tardar ~15s)...")
             self._write("Midiendo velocidad de upload...")
             upload = measure_upload_speed(self._set_status)
@@ -834,7 +934,8 @@ class OBSConfigurator:
             self._set_status("Calculando configuración óptima...")
             self._write("\nCalculando configuración óptima...")
             self.settings = calculate_obs_settings(
-                self.cpu_info, ram, upload, gpu_info=self.gpu_info, target_res='720p'
+                self.cpu_info, ram, upload,
+                gpu_info=self.gpu_info, screen_res=screen_res, target_res='auto'
             )
 
             self._set_status("Leyendo configuración actual de OBS...")
