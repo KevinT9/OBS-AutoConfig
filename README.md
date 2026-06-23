@@ -13,6 +13,7 @@ Un único `.exe` autocontenido. Compatible con **Windows 10 y 11 (64 bits)**. No
 ## ✨ Características
 
 - 🔎 **Detecta tu hardware** (CPU, RAM y GPU) vía PowerShell/CIM — funciona en Windows 10 y 11.
+- 🧩 **Detecta la versión de OBS** y soporta los modos de salida **Simple y Avanzado** (respeta el modo que ya uses).
 - 🖼️ **Detecta la resolución de tu monitor** y adapta la salida automáticamente (sin upscaling y respetando el aspecto).
 - 🎮 **Elige el mejor encoder automáticamente**: usa el **encoder por hardware** de tu GPU (NVENC/AMF/QuickSync) cuando está disponible, o **x264 por CPU** si no hay gráfica.
 - 📶 **Mide tu velocidad de subida** real y ajusta el bitrate sin pasarte del límite de Twitch.

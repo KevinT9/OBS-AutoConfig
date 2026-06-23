@@ -17,7 +17,7 @@ from escanear import (
     measure_upload_speed, calculate_obs_settings, read_obs_current_config,
     build_improvement_list, format_settings_text, apply_obs_config,
     read_obs_service, fetch_twitch_ingests, apply_twitch_service,
-    measure_ingest_latency,
+    measure_ingest_latency, get_obs_version,
 )
 
 # Paleta
@@ -217,6 +217,11 @@ class OBSConfigurator:
             screen_res = get_screen_resolution()
             self._write(f"  ✓ {screen_res[0]}x{screen_res[1]}")
 
+            self._set_status("Detectando versión de OBS...")
+            self._write("Detectando versión de OBS...")
+            obs_ver_str, obs_ver_tuple = get_obs_version()
+            self._write(f"  ✓ OBS {obs_ver_str}" if obs_ver_str else "  • Versión de OBS no detectada")
+
             self._set_status("Midiendo velocidad de upload (puede tardar ~15s)...")
             self._write("Midiendo velocidad de upload...")
             upload = measure_upload_speed(self._set_status)
@@ -226,7 +231,8 @@ class OBSConfigurator:
             self._write("\nCalculando configuración óptima...")
             self.settings = calculate_obs_settings(
                 self.cpu_info, ram, upload,
-                gpu_info=self.gpu_info, screen_res=screen_res, target_res='auto'
+                gpu_info=self.gpu_info, screen_res=screen_res, target_res='auto',
+                obs_version=obs_ver_tuple
             )
 
             self._set_status("Leyendo configuración actual de OBS...")

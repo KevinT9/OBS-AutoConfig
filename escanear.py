@@ -310,19 +310,29 @@ def measure_upload_speed(status_callback=None):
 # LÓGICA DE CONFIGURACIÓN OBS
 # ─────────────────────────────────────────────
 
-def select_encoder(gpu_info, threads):
+def select_encoder(gpu_info, threads, obs_version=None):
     """
     Elige el encoder según la GPU disponible. Prioriza hardware (libera el CPU).
     Devuelve los IDs correctos para modo Simple y Avanzado de OBS.
+
+    obs_version (tupla major,minor,patch) ajusta detalles que cambian entre
+    versiones (p. ej. la clave/valor de preset de NVENC desde OBS 28).
     """
     vendor = (gpu_info or {}).get('vendor', 'none')
+    major = (obs_version or (0, 0, 0))[0]
 
     if vendor == 'nvidia':
+        # OBS 28+ usa NVENC nuevo con presets p1-p7 (clave NVENCPreset2);
+        # versiones anteriores usan NVENCPreset con valores tipo "hq".
+        if major and major < 28:
+            preset_key, preset_value, preset_human = 'NVENCPreset', 'hq', 'HQ (calidad)'
+        else:
+            preset_key, preset_value, preset_human = 'NVENCPreset2', 'p5', 'P5 (calidad)'
         return {
             'type': 'hardware', 'vendor': 'nvidia',
             'label': 'NVENC (hardware NVIDIA)',
             'simple_value': 'nvenc', 'adv_value': 'jim_nvenc',
-            'preset_simple_key': 'NVENCPreset2', 'preset_value': 'p5', 'preset_human': 'P5 (calidad)',
+            'preset_simple_key': preset_key, 'preset_value': preset_value, 'preset_human': preset_human,
             'reason': 'GPU NVIDIA detectada — NVENC descarga la codificación del CPU y mejora la calidad frente a x264.',
         }
     if vendor == 'amd':
@@ -361,7 +371,7 @@ def select_encoder(gpu_info, threads):
 
 
 def calculate_obs_settings(cpu_info, ram_gb, upload_mbps, gpu_info=None,
-                           screen_res=None, target_res='auto'):
+                           screen_res=None, target_res='auto', obs_version=None):
     """
     Calcula la configuración óptima de OBS. Prioriza estabilidad.
 
@@ -369,9 +379,11 @@ def calculate_obs_settings(cpu_info, ram_gb, upload_mbps, gpu_info=None,
     se escala según el monitor, el upload y el encoder:
       target_res='auto'  → elige la mejor salida sostenible (por defecto)
       target_res='1080p' / '720p' → fuerza esa altura (igual limitada a lo nativo)
+
+    obs_version (tupla) ajusta detalles dependientes de versión (preset NVENC).
     """
     threads = cpu_info['threads']
-    encoder = select_encoder(gpu_info, threads)
+    encoder = select_encoder(gpu_info, threads, obs_version)
     is_hw = encoder['type'] == 'hardware'
 
     # ── Lienzo base = resolución nativa del monitor ──
@@ -486,6 +498,7 @@ def calculate_obs_settings(cpu_info, ram_gb, upload_mbps, gpu_info=None,
         'ram_gb': ram_gb,
         'gpu_names': (gpu_info or {}).get('names', []),
         'gpu_vendor': (gpu_info or {}).get('vendor', 'none'),
+        'obs_version': ('.'.join(str(x) for x in obs_version) if obs_version else None),
     }
 
 
@@ -507,6 +520,57 @@ def find_obs_config_path():
     roaming = Path.home() / 'AppData' / 'Roaming'
     found = list(roaming.glob('**/obs-studio'))
     return found[0] if found else None
+
+
+def _obs_exe_version():
+    """Versión del ejecutable obs64.exe en rutas de instalación habituales."""
+    for p in (r'C:\Program Files\obs-studio\bin\64bit\obs64.exe',
+              r'C:\Program Files (x86)\obs-studio\bin\64bit\obs64.exe'):
+        out = _run_powershell(
+            f"(Get-Item '{p}' -ErrorAction SilentlyContinue).VersionInfo.ProductVersion")
+        if out:
+            return out.strip()
+    return None
+
+
+def get_obs_version():
+    """
+    Detecta la versión de OBS. Devuelve (texto, tupla) p. ej. ("30.1.2", (30,1,2)),
+    o (None, None) si no se puede determinar.
+
+    Fuente principal: LastVersion de global.ini/user.ini (entero codificado como
+    major<<24 | minor<<16 | patch<<8). Respaldo: versión del .exe.
+    """
+    obs_path = find_obs_config_path()
+    if obs_path:
+        for fname in ('global.ini', 'user.ini'):
+            ini = obs_path / fname
+            if not ini.exists():
+                continue
+            try:
+                sections = parse_ini_to_sections(ini.read_text(encoding='utf-8', errors='ignore'))
+            except Exception:
+                continue
+            lv = sections.get('General', {}).get('LastVersion')
+            try:
+                v = int(lv)
+                major, minor, patch = (v >> 24) & 0xFF, (v >> 16) & 0xFF, (v >> 8) & 0xFF
+                if major:
+                    return f"{major}.{minor}.{patch}", (major, minor, patch)
+            except (TypeError, ValueError):
+                continue
+
+    exe_ver = _obs_exe_version()
+    if exe_ver:
+        parts = exe_ver.split('.')
+        try:
+            t = tuple(int(x) for x in parts[:3])
+            while len(t) < 3:
+                t = t + (0,)
+            return '.'.join(str(x) for x in t), t
+        except ValueError:
+            return exe_ver, None
+    return None, None
 
 
 def get_obs_basic_ini_path():
@@ -586,17 +650,24 @@ def read_obs_current_config():
 
     if is_advanced:
         encoder_id = advout.get('Encoder')
-        # En modo Avanzado el bitrate del stream vive en otro archivo, no en basic.ini
-        video_bitrate = None
-        preset = advout.get('Preset') or advout.get('AMDPreset') or advout.get('NVENCPreset')
+        # En modo Avanzado el bitrate/preset del stream viven en streamEncoder.json
+        adv_enc = {}
+        enc_json = basic_ini.parent / 'streamEncoder.json'
+        if enc_json.exists():
+            try:
+                adv_enc = json.loads(enc_json.read_text(encoding='utf-8'))
+            except Exception:
+                adv_enc = {}
+        video_bitrate = to_int(adv_enc.get('bitrate'))
+        preset = adv_enc.get('preset') or adv_enc.get('preset2') or advout.get('Preset')
+        audio_bitrate = to_int(advout.get('Track1Bitrate')) or to_int(simple.get('ABitrate'))
     else:
         encoder_id = simple.get('StreamEncoder')
         video_bitrate = to_int(simple.get('VBitrate'))
         preset = (simple.get('Preset') or simple.get('AMDPreset')
                   or simple.get('NVENCPreset2') or simple.get('NVENCPreset')
                   or simple.get('QSVPreset'))
-
-    audio_bitrate = to_int(simple.get('ABitrate')) or to_int(advout.get('FFABitrate'))
+        audio_bitrate = to_int(simple.get('ABitrate'))
 
     current = {
         'source_file': str(basic_ini),
@@ -613,10 +684,11 @@ def read_obs_current_config():
         'preset': preset,
         'audio_sample_rate': to_int(audio.get('SampleRate')),
         'scale_type': (video.get('ScaleType') or '').strip().lower() or None,
-        'rec_format': (simple.get('RecFormat2') or simple.get('RecFormat') or '').strip().lower() or None,
+        'rec_format': (simple.get('RecFormat2') or simple.get('RecFormat')
+                       or advout.get('RecFormat2') or advout.get('RecFormat') or '').strip().lower() or None,
         'rec_quality': (simple.get('RecQuality') or '').strip() or None,
-        'rec_encoder': (simple.get('RecEncoder') or '').strip() or None,
-        'rec_path': (simple.get('FilePath') or '').strip() or None,
+        'rec_encoder': (simple.get('RecEncoder') or advout.get('RecEncoder') or '').strip() or None,
+        'rec_path': (simple.get('FilePath') or advout.get('RecFilePath') or '').strip() or None,
         'dynamic_bitrate': (output.get('DynamicBitrate') or '').strip().lower() == 'true',
     }
     return current, None
@@ -705,8 +777,8 @@ def build_improvement_list(current_obs, recommended):
 
     if (current_obs.get('mode') or '').lower().startswith('adv'):
         improvements.append(
-            "Estás en modo Salida 'Avanzado': verifica que el Control de tasa sea CBR "
-            "y el intervalo de keyframe = 2 s (requisitos de Twitch)."
+            "Estás en modo Salida 'Avanzado': se aplicará sobre ese modo "
+            "(encoder + streamEncoder.json con CBR y keyframe 2 s), sin cambiarte a Simple."
         )
 
     if not improvements:
@@ -715,8 +787,50 @@ def build_improvement_list(current_obs, recommended):
     return improvements
 
 
+def _set_ini_value(text, section, key, value):
+    """Reemplaza o inserta `key=value` dentro de `[section]` en texto INI."""
+    import re
+    section_pattern = re.compile(rf'^\[{re.escape(section)}\]', re.MULTILINE)
+    match = section_pattern.search(text)
+    if match:
+        key_pattern = re.compile(rf'^{re.escape(key)}=.*$', re.MULTILINE)
+        section_start = match.end()
+        next_section = re.search(r'^\[', text[section_start:], re.MULTILINE)
+        section_end = section_start + next_section.start() if next_section else len(text)
+        section_body = text[section_start:section_end]
+        if key_pattern.search(section_body):
+            new_body = key_pattern.sub(f'{key}={value}', section_body)
+            return text[:section_start] + new_body + text[section_end:]
+        insert_pos = section_start + len(section_body.rstrip('\n'))
+        return text[:insert_pos] + f'\n{key}={value}' + text[insert_pos:]
+    return text + f'\n[{section}]\n{key}={value}\n'
+
+
+def _build_stream_encoder_json(settings):
+    """Construye el contenido de streamEncoder.json para el modo Avanzado."""
+    enc = settings['encoder']
+    data = {
+        'bitrate': settings['video_bitrate'],
+        'rate_control': 'CBR',
+        'keyint_sec': settings['keyframe_interval'],
+        'preset': enc['preset_value'],
+        'profile': settings['profile'],
+    }
+    if enc['vendor'] == 'cpu':
+        data['x264opts'] = ''
+    return data
+
+
 def apply_obs_config(settings):
-    """Aplica la configuración a basic.ini de OBS (con backup previo)."""
+    """
+    Aplica la configuración a OBS (con backup previo).
+
+    Respeta el MODO de salida actual del usuario:
+      • Simple   → escribe en [SimpleOutput] (bitrate, encoder, grabación…).
+      • Avanzado → escribe [AdvOut].Encoder y streamEncoder.json (bitrate, CBR,
+                   keyframe, preset, perfil), conservando el modo Avanzado.
+    Los ajustes de Video/Audio/Red son comunes a ambos modos.
+    """
     basic_ini, error = get_obs_basic_ini_path()
     if error:
         return False, f"{error}\nAsegúrate de haber abierto OBS al menos una vez."
@@ -727,26 +841,14 @@ def apply_obs_config(settings):
     with open(basic_ini, 'r', encoding='utf-8') as f:
         content = f.read()
 
-    def set_ini_value(text, section, key, value):
-        import re
-        section_pattern = re.compile(rf'^\[{re.escape(section)}\]', re.MULTILINE)
-        match = section_pattern.search(text)
-        if match:
-            key_pattern = re.compile(rf'^{re.escape(key)}=.*$', re.MULTILINE)
-            section_start = match.end()
-            next_section = re.search(r'^\[', text[section_start:], re.MULTILINE)
-            section_end = section_start + next_section.start() if next_section else len(text)
-            section_body = text[section_start:section_end]
-            if key_pattern.search(section_body):
-                new_body = key_pattern.sub(f'{key}={value}', section_body)
-                return text[:section_start] + new_body + text[section_end:]
-            insert_pos = section_start + len(section_body.rstrip('\n'))
-            return text[:insert_pos] + f'\n{key}={value}' + text[insert_pos:]
-        return text + f'\n[{section}]\n{key}={value}\n'
+    sections = parse_ini_to_sections(content)
+    mode = (sections.get('Output', {}).get('Mode') or 'Simple').strip()
+    is_advanced = mode.lower().startswith('adv')
 
     enc = settings['encoder']
+
+    # ── Ajustes comunes (Video / Audio / Red) ──
     changes = {
-        ('Output', 'Mode'): 'Simple',
         ('Video', 'BaseCX'): str(settings['base_width']),
         ('Video', 'BaseCY'): str(settings['base_height']),
         ('Video', 'OutputCX'): str(settings['output_width']),
@@ -755,26 +857,51 @@ def apply_obs_config(settings):
         ('Video', 'FPSCommon'): str(settings['fps']),
         ('Video', 'ScaleType'): settings['scale_type'],
         ('Audio', 'SampleRate'): str(settings['audio_sample_rate']),
-        ('SimpleOutput', 'VBitrate'): str(settings['video_bitrate']),
-        ('SimpleOutput', 'ABitrate'): str(settings['audio_bitrate']),
-        ('SimpleOutput', 'StreamEncoder'): enc['simple_value'],
-        ('SimpleOutput', enc['preset_simple_key']): enc['preset_value'],
-        # Grabación local (#5)
-        ('SimpleOutput', 'RecFormat2'): settings['rec_format'],
-        ('SimpleOutput', 'RecFormat'): settings['rec_format'],
-        ('SimpleOutput', 'RecQuality'): settings['rec_quality'],
-        ('SimpleOutput', 'RecEncoder'): settings['rec_encoder'],
-        # Resiliencia de red (#7)
         ('Output', 'DynamicBitrate'): 'true' if settings['dynamic_bitrate'] else 'false',
     }
 
+    extra_msg = ""
+    if is_advanced:
+        # Encoder de stream/grabación en [AdvOut]
+        changes.update({
+            ('AdvOut', 'Encoder'): enc['adv_value'],
+            ('AdvOut', 'RecEncoder'): enc['adv_value'],
+            ('AdvOut', 'RecFormat2'): settings['rec_format'],
+            ('AdvOut', 'RecFormat'): settings['rec_format'],
+            ('AdvOut', 'TrackIndex'): '1',
+        })
+        # Ajustes del encoder de stream → streamEncoder.json
+        enc_json = basic_ini.parent / 'streamEncoder.json'
+        try:
+            if enc_json.exists():
+                shutil.copy2(enc_json, enc_json.with_suffix('.json.bak'))
+            enc_json.write_text(json.dumps(_build_stream_encoder_json(settings), indent=4),
+                                encoding='utf-8')
+            extra_msg = f"\nEncoder de stream: {enc_json.name}"
+        except Exception as e:
+            extra_msg = f"\n⚠ No se pudo escribir streamEncoder.json: {e}"
+    else:
+        changes.update({
+            ('Output', 'Mode'): 'Simple',
+            ('SimpleOutput', 'VBitrate'): str(settings['video_bitrate']),
+            ('SimpleOutput', 'ABitrate'): str(settings['audio_bitrate']),
+            ('SimpleOutput', 'StreamEncoder'): enc['simple_value'],
+            ('SimpleOutput', enc['preset_simple_key']): enc['preset_value'],
+            ('SimpleOutput', 'RecFormat2'): settings['rec_format'],
+            ('SimpleOutput', 'RecFormat'): settings['rec_format'],
+            ('SimpleOutput', 'RecQuality'): settings['rec_quality'],
+            ('SimpleOutput', 'RecEncoder'): settings['rec_encoder'],
+        })
+
     for (section, key), value in changes.items():
-        content = set_ini_value(content, section, key, value)
+        content = _set_ini_value(content, section, key, value)
 
     with open(basic_ini, 'w', encoding='utf-8') as f:
         f.write(content)
 
-    return True, f"Configuración aplicada en:\n{basic_ini}\nBackup guardado en:\n{backup_path}"
+    modo_txt = "Avanzado" if is_advanced else "Simple"
+    return True, (f"Configuración aplicada (modo {modo_txt}) en:\n{basic_ini}{extra_msg}\n"
+                  f"Backup guardado en:\n{backup_path}")
 
 
 # ─────────────────────────────────────────────
@@ -939,6 +1066,7 @@ def format_settings_text(settings, cpu_info, current_obs=None, improvements=None
         f"  GPU:     {gpu_text}",
         f"  Monitor: {settings['base_width']}x{settings['base_height']}",
         f"  Upload:  {settings['upload_mbps']} Mbps",
+        f"  OBS:     {settings.get('obs_version') or 'no detectada'}",
         "",
         "── CONFIGURACIÓN DE VIDEO ────────────────────────────",
         f"  Resolución base:    {settings['base_width']}x{settings['base_height']} (lienzo = monitor)",
