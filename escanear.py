@@ -955,6 +955,49 @@ def apply_obs_config(settings):
                   f"Backup guardado en:\n{backup_path}")
 
 
+def obs_backup_exists():
+    """True si hay un backup de basic.ini para el perfil activo."""
+    basic_ini, error = get_obs_basic_ini_path()
+    if error:
+        return False
+    return basic_ini.with_suffix('.ini.bak').exists()
+
+
+def restore_obs_config():
+    """
+    Restaura la configuración de OBS desde el backup creado al aplicar
+    (basic.ini.bak y, si existe, streamEncoder.json.bak), para el perfil activo.
+    """
+    basic_ini, error = get_obs_basic_ini_path()
+    if error:
+        return False, error
+
+    backup = basic_ini.with_suffix('.ini.bak')
+    if not backup.exists():
+        return False, ("No hay copia de seguridad para este perfil.\n"
+                       "Solo se puede restaurar después de aplicar cambios con la app.")
+
+    restored = []
+    try:
+        shutil.copy2(backup, basic_ini)
+        restored.append(basic_ini.name)
+    except Exception as e:
+        return False, f"No se pudo restaurar basic.ini: {e}"
+
+    # streamEncoder.json (modo Avanzado)
+    enc_json = basic_ini.parent / 'streamEncoder.json'
+    enc_bak = enc_json.with_suffix('.json.bak')
+    if enc_bak.exists():
+        try:
+            shutil.copy2(enc_bak, enc_json)
+            restored.append(enc_json.name)
+        except Exception:
+            pass
+
+    return True, (f"Restaurado desde backup: {', '.join(restored)}.\n"
+                  f"{basic_ini.parent}")
+
+
 # ─────────────────────────────────────────────
 # SERVICIO TWITCH (service.json)
 # ─────────────────────────────────────────────

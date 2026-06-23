@@ -15,7 +15,7 @@ from tkinter import Tk, ttk, messagebox, StringVar, scrolledtext
 from escanear import (
     get_cpu_info, get_ram_gb, get_gpu_info, get_screen_resolution,
     measure_upload_speed, calculate_obs_settings, read_obs_current_config,
-    build_improvement_list, format_settings_text, apply_obs_config,
+    build_improvement_list, format_settings_text, apply_obs_config, restore_obs_config,
     read_obs_service, fetch_twitch_ingests, apply_twitch_service,
     measure_ingest_latency, get_obs_version,
     list_obs_profiles, set_active_profile,
@@ -139,25 +139,27 @@ class OBSConfigurator:
         btn_frame = tk.Frame(self.root, bg=BG, pady=12)
         btn_frame.pack(fill='x', padx=16)
         btn_style = {'font': ('Consolas', 10, 'bold'), 'relief': 'flat',
-                     'borderwidth': 0, 'padx': 20, 'pady': 10, 'cursor': 'hand2'}
+                     'borderwidth': 0, 'padx': 12, 'pady': 10, 'cursor': 'hand2'}
 
-        self.btn_analyze = tk.Button(btn_frame, text="▶  ANALIZAR Y CONFIGURAR",
+        self.btn_analyze = tk.Button(btn_frame, text="▶  ANALIZAR",
                                      bg=GREEN, fg='#0a0a1a', command=self._start_analysis, **btn_style)
-        self.btn_analyze.pack(side='left', padx=(0, 8))
+        self.btn_analyze.pack(side='left', padx=(0, 6))
         add_hover(self.btn_analyze, GREEN, GREEN_HOVER)
 
         self.btn_copy = tk.Button(btn_frame, text="⎘  COPIAR", bg=ACCENT, fg=TEXT,
                                   command=self._copy_to_clipboard, state='disabled', **btn_style)
-        self.btn_copy.pack(side='left', padx=(0, 8))
+        self.btn_copy.pack(side='left', padx=(0, 6))
         add_hover(self.btn_copy, ACCENT, ACCENT_HOVER)
 
         self.btn_apply = tk.Button(btn_frame, text="✓  APLICAR A OBS", bg='#1a3a2a', fg=GREEN,
                                    command=self._apply_to_obs, state='disabled', **btn_style)
-        self.btn_apply.pack(side='left')
+        self.btn_apply.pack(side='left', padx=(0, 6))
         add_hover(self.btn_apply, '#1a3a2a', '#244e3a')
 
-        tk.Label(btn_frame, text="OBS debe estar cerrado para aplicar",
-                 font=('Consolas', 8), bg=BG, fg=SUBTEXT).pack(side='right', padx=4)
+        self.btn_restore = tk.Button(btn_frame, text="↩  RESTAURAR", bg='#3a2a1a', fg=YELLOW,
+                                     command=self._restore_obs, **btn_style)
+        self.btn_restore.pack(side='left')
+        add_hover(self.btn_restore, '#3a2a1a', '#4d3826')
 
     # ── Helpers de la GUI ──
     def _write(self, text):
@@ -340,6 +342,29 @@ class OBSConfigurator:
                 "Usa los valores mostrados en pantalla para configurar OBS manualmente.",
                 parent=self.root
             )
+
+    def _restore_obs(self):
+        """Restaura la configuración de OBS al estado previo a aplicar (desde backup)."""
+        confirm = messagebox.askyesno(
+            "Restaurar configuración",
+            "Esto restaurará la configuración de OBS al estado anterior a aplicar "
+            "los cambios con la app (desde el backup .bak).\n\n"
+            "¿OBS está cerrado?\n\n¿Continuar?",
+            icon='warning', parent=self.root
+        )
+        if not confirm:
+            return
+
+        self._set_status("Restaurando configuración de OBS...")
+        success, message = restore_obs_config()
+        if success:
+            self._write(f"\n↩ {message}")
+            self._set_status("✓ Configuración restaurada.")
+            messagebox.showinfo("Configuración restaurada", f"↩ {message}", parent=self.root)
+        else:
+            self._write(f"\n• No se pudo restaurar: {message}")
+            self._set_status("No se pudo restaurar.")
+            messagebox.showwarning("Restaurar", message, parent=self.root)
 
 
 class TwitchDialog:
