@@ -573,8 +573,51 @@ def get_obs_version():
     return None, None
 
 
+# Perfil de OBS activo (nombre de carpeta). None = autodetección.
+_active_profile = None
+
+
+def set_active_profile(folder_name):
+    """Fija el perfil de OBS a usar (por nombre de carpeta). None = autodetectar."""
+    global _active_profile
+    _active_profile = folder_name or None
+
+
+def get_active_profile():
+    return _active_profile
+
+
+def list_obs_profiles():
+    """
+    Lista los perfiles de OBS como [(nombre_visible, nombre_carpeta)].
+    El nombre visible se lee de [General] Name en basic.ini (si existe).
+    """
+    obs_path = find_obs_config_path()
+    result = []
+    if not obs_path:
+        return result
+    profiles_path = obs_path / 'basic' / 'profiles'
+    if not profiles_path.exists():
+        return result
+    for p in sorted(profiles_path.iterdir(), key=lambda x: x.name.lower()):
+        if not p.is_dir():
+            continue
+        display = p.name
+        bi = p / 'basic.ini'
+        if bi.exists():
+            try:
+                secs = parse_ini_to_sections(bi.read_text(encoding='utf-8', errors='ignore'))
+                name = secs.get('General', {}).get('Name')
+                if name:
+                    display = name
+            except Exception:
+                pass
+        result.append((display, p.name))
+    return result
+
+
 def get_obs_basic_ini_path():
-    """Resuelve la ruta al basic.ini del perfil de OBS más probable."""
+    """Resuelve la ruta al basic.ini del perfil activo (o el más probable)."""
     obs_path = find_obs_config_path()
     if not obs_path:
         return None, "No se encontró la carpeta de configuración de OBS."
@@ -588,10 +631,18 @@ def get_obs_basic_ini_path():
         return None, "No hay perfiles de OBS creados. Abre OBS primero."
 
     profile_path = None
-    for p in profiles:
-        if 'untitled' in p.name.lower() or 'default' in p.name.lower():
-            profile_path = p
-            break
+    # 1) Perfil seleccionado explícitamente
+    if _active_profile:
+        for p in profiles:
+            if p.name == _active_profile:
+                profile_path = p
+                break
+    # 2) Autodetección: untitled/default; si no, el primero
+    if not profile_path:
+        for p in profiles:
+            if 'untitled' in p.name.lower() or 'default' in p.name.lower():
+                profile_path = p
+                break
     if not profile_path:
         profile_path = profiles[0]
 

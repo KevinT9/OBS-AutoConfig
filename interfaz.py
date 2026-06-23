@@ -18,6 +18,7 @@ from escanear import (
     build_improvement_list, format_settings_text, apply_obs_config,
     read_obs_service, fetch_twitch_ingests, apply_twitch_service,
     measure_ingest_latency, get_obs_version,
+    list_obs_profiles, set_active_profile,
 )
 
 # Paleta
@@ -72,6 +73,7 @@ class OBSConfigurator:
         self.gpu_info = None
         self.current_obs = None
         self.improvements = None
+        self.profiles = []
 
         self._build_ui()
         self.root.mainloop()
@@ -101,6 +103,16 @@ class OBSConfigurator:
         )
         self.btn_twitch.pack(side='right', padx=(0, 8))
         add_hover(self.btn_twitch, ACCENT, ACCENT_HOVER)
+
+        # Selector de perfil de OBS
+        prof_frame = tk.Frame(self.root, bg=BG, padx=16, pady=(10, 2))
+        prof_frame.pack(fill='x')
+        tk.Label(prof_frame, text="Perfil de OBS:", font=('Consolas', 9),
+                 bg=BG, fg=SUBTEXT).pack(side='left')
+        self.profile_box = ttk.Combobox(prof_frame, state='readonly', font=('Consolas', 9), width=34)
+        self.profile_box.pack(side='left', padx=8)
+        self.profile_box.bind('<<ComboboxSelected>>', self._on_profile_select)
+        self._load_profiles()
 
         status_frame = tk.Frame(self.root, bg=CARD, height=36)
         status_frame.pack(fill='x')
@@ -162,6 +174,32 @@ class OBSConfigurator:
     def _set_status(self, text):
         self.status_var.set(text)
         self.root.update_idletasks()
+
+    def _load_profiles(self):
+        """Carga la lista de perfiles de OBS en el selector."""
+        try:
+            self.profiles = list_obs_profiles()  # [(visible, carpeta)]
+        except Exception:
+            self.profiles = []
+        if self.profiles:
+            self.profile_box.configure(values=[d for d, _ in self.profiles], state='readonly')
+            # Preseleccionar el que OBS usaría por defecto (untitled/default)
+            idx = 0
+            for i, (_d, folder) in enumerate(self.profiles):
+                if 'untitled' in folder.lower() or 'default' in folder.lower():
+                    idx = i
+                    break
+            self.profile_box.current(idx)
+            set_active_profile(self.profiles[idx][1])
+        else:
+            self.profile_box.configure(values=["(OBS no encontrado)"], state='disabled')
+            self.profile_box.set("(OBS no encontrado)")
+
+    def _on_profile_select(self, event=None):
+        i = self.profile_box.current()
+        if 0 <= i < len(self.profiles):
+            set_active_profile(self.profiles[i][1])
+            self._set_status(f"Perfil activo: {self.profiles[i][0]}. Vuelve a analizar para ver su configuración.")
 
     def _open_optimizer(self):
         """Abre el módulo de optimización de PC en una ventana aparte."""
