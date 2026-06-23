@@ -105,8 +105,8 @@ class OBSConfigurator:
         add_hover(self.btn_twitch, ACCENT, ACCENT_HOVER)
 
         # Selector de perfil de OBS
-        prof_frame = tk.Frame(self.root, bg=BG, padx=16, pady=(10, 2))
-        prof_frame.pack(fill='x')
+        prof_frame = tk.Frame(self.root, bg=BG, padx=16)
+        prof_frame.pack(fill='x', pady=(10, 2))
         tk.Label(prof_frame, text="Perfil de OBS:", font=('Consolas', 9),
                  bg=BG, fg=SUBTEXT).pack(side='left')
         self.profile_box = ttk.Combobox(prof_frame, state='readonly', font=('Consolas', 9), width=34)
