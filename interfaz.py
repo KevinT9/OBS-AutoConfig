@@ -17,6 +17,7 @@ from escanear import (
     measure_upload_speed, calculate_obs_settings, read_obs_current_config,
     build_improvement_list, format_settings_text, apply_obs_config,
     read_obs_service, fetch_twitch_ingests, apply_twitch_service,
+    measure_ingest_latency,
 )
 
 # Paleta
@@ -341,7 +342,15 @@ class TwitchDialog:
         self.server_box = ttk.Combobox(body, state='readonly', font=('Consolas', 9),
                                        values=['Auto (recomendado)'])
         self.server_box.current(0)
-        self.server_box.pack(fill='x', pady=(2, 12))
+        self.server_box.pack(fill='x', pady=(2, 4))
+
+        self.btn_latency = tk.Button(
+            body, text="🔎 Medir latencia y elegir el mejor", font=('Consolas', 8, 'bold'),
+            bg=ACCENT, fg=TEXT, relief='flat', borderwidth=0, padx=10, pady=5,
+            cursor='hand2', command=self._start_latency
+        )
+        self.btn_latency.pack(anchor='w', pady=(0, 12))
+        add_hover(self.btn_latency, ACCENT, ACCENT_HOVER)
 
         tk.Label(body, text="Stream key (opcional — si la dejas vacía se conserva la actual):",
                  font=('Consolas', 9, 'bold'), bg=BG, fg=TEXT, anchor='w', wraplength=480,
@@ -403,6 +412,34 @@ class TwitchDialog:
         self.server_box.current(0)
         extra = "" if len(self.servers) > 1 else " (sin conexión: solo Auto)"
         self.status_var.set(f"{len(self.servers)} servidores disponibles{extra}.")
+
+    def _start_latency(self):
+        if len(self.servers) <= 1:
+            self.status_var.set("Aún no hay lista de servidores (¿sin conexión?).")
+            return
+        self.btn_latency.configure(state='disabled')
+        self.status_var.set("Midiendo latencia a los servidores de Twitch…")
+        threading.Thread(target=self._measure_latency, daemon=True).start()
+
+    def _measure_latency(self):
+        try:
+            results = measure_ingest_latency(self.servers)
+            reachable = [(n, u, ms) for n, u, ms in results if ms is not None]
+            if not reachable:
+                self.status_var.set("No se pudo medir latencia (firewall/red).")
+                return
+            best_name, best_url, best_ms = reachable[0]
+            # Seleccionar el mejor en el combobox
+            for i, (n, u) in enumerate(self.servers):
+                if u == best_url:
+                    self.server_box.current(i)
+                    break
+            top = " | ".join(f"{n.split('(')[0].strip()}: {ms}ms" for n, u, ms in reachable[:3])
+            self.status_var.set(f"Mejor: {best_name} ({best_ms} ms). Top: {top}")
+        except Exception as e:
+            self.status_var.set(f"Error midiendo latencia: {e}")
+        finally:
+            self.btn_latency.configure(state='normal')
 
     def _apply(self):
         idx = self.server_box.current()

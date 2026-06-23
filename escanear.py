@@ -426,6 +426,15 @@ def calculate_obs_settings(cpu_info, ram_gb, upload_mbps, gpu_info=None,
     profile = 'main'             # compatible con todos los dispositivos
     scale_type = 'lanczos'       # mejor nitidez al reescalar el lienzo a la salida
 
+    # ── Grabación local (#5) ──
+    rec_format = 'mkv'                          # contenedor a prueba de cierres inesperados
+    rec_quality = 'Small'                       # "Alta calidad, tamaño medio" en OBS
+    rec_quality_human = 'Alta calidad, tamaño medio'
+    rec_encoder = encoder['simple_value']       # graba con el mismo encoder por hardware
+
+    # ── Resiliencia de red (#7) ──
+    dynamic_bitrate = True                      # baja el bitrate solo si hay congestión
+
     res_reason = (
         f"Monitor {base_width}x{base_height} → salida {out_width}x{out_height} @ {fps} FPS "
         f"(según upload {upload_mbps} Mbps y encoder {'hardware' if is_hw else 'CPU'})."
@@ -465,6 +474,11 @@ def calculate_obs_settings(cpu_info, ram_gb, upload_mbps, gpu_info=None,
         'scale_type': scale_type,
         'rate_control': 'CBR',          # requerido por Twitch
         'keyframe_interval': 2,         # requerido por Twitch
+        'rec_format': rec_format,
+        'rec_quality': rec_quality,
+        'rec_quality_human': rec_quality_human,
+        'rec_encoder': rec_encoder,
+        'dynamic_bitrate': dynamic_bitrate,
         'resolution_reason': res_reason,
         'warnings': warnings,
         'upload_mbps': upload_mbps,
@@ -599,6 +613,11 @@ def read_obs_current_config():
         'preset': preset,
         'audio_sample_rate': to_int(audio.get('SampleRate')),
         'scale_type': (video.get('ScaleType') or '').strip().lower() or None,
+        'rec_format': (simple.get('RecFormat2') or simple.get('RecFormat') or '').strip().lower() or None,
+        'rec_quality': (simple.get('RecQuality') or '').strip() or None,
+        'rec_encoder': (simple.get('RecEncoder') or '').strip() or None,
+        'rec_path': (simple.get('FilePath') or '').strip() or None,
+        'dynamic_bitrate': (output.get('DynamicBitrate') or '').strip().lower() == 'true',
     }
     return current, None
 
@@ -666,6 +685,18 @@ def build_improvement_list(current_obs, recommended):
             f"Filtro de reescalado: {cur_scale} → {recommended['scale_type']} (más nitidez)."
         )
 
+    cur_recfmt = current_obs.get('rec_format')
+    if cur_recfmt is not None and cur_recfmt != recommended['rec_format']:
+        improvements.append(
+            f"Formato de grabación: {cur_recfmt} → {recommended['rec_format']} "
+            f"(a prueba de cierres inesperados)."
+        )
+
+    if not current_obs.get('dynamic_bitrate') and recommended.get('dynamic_bitrate'):
+        improvements.append(
+            "Activar 'Dynamic Bitrate': baja el bitrate solo si hay congestión y reduce frames perdidos."
+        )
+
     cur_fam = _encoder_family(current_obs.get('encoder_id'))
     rec_fam = _encoder_family(enc['simple_value'])
     if cur_fam != rec_fam:
@@ -728,6 +759,13 @@ def apply_obs_config(settings):
         ('SimpleOutput', 'ABitrate'): str(settings['audio_bitrate']),
         ('SimpleOutput', 'StreamEncoder'): enc['simple_value'],
         ('SimpleOutput', enc['preset_simple_key']): enc['preset_value'],
+        # Grabación local (#5)
+        ('SimpleOutput', 'RecFormat2'): settings['rec_format'],
+        ('SimpleOutput', 'RecFormat'): settings['rec_format'],
+        ('SimpleOutput', 'RecQuality'): settings['rec_quality'],
+        ('SimpleOutput', 'RecEncoder'): settings['rec_encoder'],
+        # Resiliencia de red (#7)
+        ('Output', 'DynamicBitrate'): 'true' if settings['dynamic_bitrate'] else 'false',
     }
 
     for (section, key), value in changes.items():
@@ -794,6 +832,44 @@ def fetch_twitch_ingests(timeout=8):
     except Exception:
         pass
     return servers
+
+
+def _host_from_rtmp(url):
+    """rtmp://mex.contribute.live-video.net/app → mex.contribute.live-video.net"""
+    s = (url or '').split('://', 1)[-1]
+    return s.split('/', 1)[0]
+
+
+def _tcp_ping(host, port=1935, timeout=2.0):
+    """Latencia de conexión TCP en ms, o None si falla."""
+    import socket
+    try:
+        start = time.time()
+        with socket.create_connection((host, port), timeout=timeout):
+            return round((time.time() - start) * 1000)
+    except Exception:
+        return None
+
+
+def measure_ingest_latency(servers, timeout=2.0):
+    """
+    Mide la latencia TCP (puerto 1935) a cada servidor de ingest, en paralelo.
+    Devuelve [(nombre, url, ms)] ordenado por latencia (None al final).
+    Ignora la entrada 'auto'.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    items = [(n, u) for n, u in servers if u and u != 'auto']
+
+    def _job(item):
+        name, url = item
+        return name, url, _tcp_ping(_host_from_rtmp(url), 1935, timeout)
+
+    results = []
+    if items:
+        with ThreadPoolExecutor(max_workers=min(16, len(items))) as ex:
+            results = list(ex.map(_job, items))
+    results.sort(key=lambda x: (x[2] is None, x[2] if x[2] is not None else 9e9))
+    return results
 
 
 def apply_twitch_service(server='auto', stream_key=None):
@@ -885,6 +961,15 @@ def format_settings_text(settings, cpu_info, current_obs=None, improvements=None
         f"  Frecuencia:         {settings['audio_sample_rate']} Hz (Twitch usa 48 kHz)",
         f"  Codec:              AAC",
         "",
+        "── GRABACIÓN LOCAL ───────────────────────────────────",
+        f"  Formato:            {settings['rec_format'].upper()} (a prueba de cierres)",
+        f"  Calidad:            {settings['rec_quality_human']}",
+        f"  Encoder grabación:  {settings['rec_encoder']}",
+        "",
+        "── RESILIENCIA DE RED ────────────────────────────────",
+        f"  Dynamic Bitrate:    {'activado' if settings['dynamic_bitrate'] else 'desactivado'} "
+        f"(baja el bitrate solo si hay congestión)",
+        "",
         "── CÓMO APLICAR EN OBS (si no se aplicó automático) ──",
         "  Configuración → Salida → Modo Simple:",
         f"    • Bitrate de video: {settings['video_bitrate']}",
@@ -914,6 +999,8 @@ def format_settings_text(settings, cpu_info, current_obs=None, improvements=None
             f"  Bitrate audio:      {current_obs.get('audio_bitrate')} kb/s",
             f"  Frecuencia audio:   {current_obs.get('audio_sample_rate')} Hz",
             f"  Filtro reescalado:  {current_obs.get('scale_type')}",
+            f"  Grabación:          {current_obs.get('rec_format')} / {current_obs.get('rec_quality')}",
+            f"  Dynamic Bitrate:    {'activado' if current_obs.get('dynamic_bitrate') else 'desactivado'}",
             f"  Encoder:            {current_obs.get('encoder_label')}",
             f"  Preset:             {current_obs.get('preset')}",
         ]
